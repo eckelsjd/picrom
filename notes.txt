@@ -1,0 +1,10 @@
+Warp-X:
+- 5e-12 s per timestep. 20ns per 4000 timesteps
+- 1000 total time steps (up to iteration 4,000,000 and 20 micro-seconds)
+
+openPMD stuff
+- jupyterlab and ipympl don't install correctly through pdm for some reason
+- have to do:
+    pdm run python -m ensurepip
+    pdm run python -m pip install jupyterlab
+    pdm run python -m pip install ipympl

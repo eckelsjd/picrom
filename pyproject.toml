@@ -1,0 +1,74 @@
+[project]
+name = "picrom"
+dynamic = ["version"]
+description = "Reduced-order modeling for particle-in-cell simulations"
+authors = [
+    {name = "Joshua Eckels", email = "eckelsjd@umich.edu"},
+]
+dependencies = [
+    "numpy>=1.26.3",
+    "matplotlib>=3.8.2",
+    "scipy>=1.12.0",
+]
+requires-python = ">=3.11"
+readme = "docs/README.md"
+license = {text = "GPLv3"}
+keywords = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Intended Audience :: Science/Research"
+]
+
+[project.urls]
+Repository = "https://github.com/eckelsjd/picrom.git"
+Documentation = "https://eckelsjd.github.io/picrom/"
+
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pylint.MASTER]
+ignore-paths = [ "^.venv/.*$", "^docs/*" ]
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = '''
+missing-module-docstring,
+missing-class-docstring,
+missing-function-docstring
+'''
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning"
+]
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.version]
+source = "file"
+path = "src/picrom/__init__.py"
+
+[tool.pdm.scripts]
+post_init = "pdm install"
+test = "pytest --cov=picrom tests"
+docs = "mkdocs serve"
+jupyter_install = "python -m pip install jupyterlab ipympl wget"
+release = "python release.py"
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest>=7.4.4",
+    "pytest-cov>=4.1.0",
+    "mkdocs>=1.5.3",
+    "mkdocs-material>=9.5.5",
+    "GitPython>=3.1.41",
+    "mkdocstrings[python]>=0.24.0",
+    "h5py>=3.11.0",
+    "openpmd-viewer>=1.10.0",
+]
