@@ -9,6 +9,8 @@ dependencies = [
     "numpy>=1.26.3",
     "matplotlib>=3.8.2",
     "scipy>=1.12.0",
+    "joblib>=1.4.2",
+    "tqdm>=4.66.4",
 ]
 requires-python = ">=3.11"
 readme = "docs/README.md"
@@ -71,4 +73,5 @@ dev = [
     "mkdocstrings[python]>=0.24.0",
     "h5py>=3.11.0",
     "openpmd-viewer>=1.10.0",
+    "-e file:///${PROJECT_ROOT}/../uqtils#egg=uqtils",
 ]
