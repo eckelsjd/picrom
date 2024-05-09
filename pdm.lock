@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.1"
-content_hash = "sha256:6807b0f4c7339929580755f42f9ffecb30a80d1fec7aa1b572d4de4765729e03"
+content_hash = "sha256:83e012e7a761b6cb76feb45b7d1f9bb6a2af9c93d513a88807f0ead9dea8bbe5"
 
 [[package]]
 name = "babel"
@@ -1038,6 +1038,25 @@ groups = ["dev"]
 files = [
     {file = "urllib3-2.1.0-py3-none-any.whl", hash = "sha256:55901e917a5896a349ff771be919f8bd99aff50b79fe58fec595eb37bbc56bb3"},
     {file = "urllib3-2.1.0.tar.gz", hash = "sha256:df7aa8afb0148fa78488e7899b2c59b5f4ffcfa82e6c54ccb9dd37c1d7b52d54"},
+]
+
+[[package]]
+name = "vtk"
+version = "9.3.0"
+summary = "VTK is an open-source toolkit for 3D computer graphics, image processing, and visualization"
+groups = ["default"]
+dependencies = [
+    "matplotlib>=2.0.0",
+]
+files = [
+    {file = "vtk-9.3.0-cp311-cp311-macosx_10_10_x86_64.whl", hash = "sha256:a3cd59108b21f55b873a63878a0decec0a707bd960b59d5e15b37d1ad873590f"},
+    {file = "vtk-9.3.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:6d2bdd2c60f0fa5d1926c11b72d96dc23caf9ff41781bae76e48edd09fb8aa03"},
+    {file = "vtk-9.3.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3a02bf6067cae7abfd7f6b1330c69555b715be8ec71a3c8d6471af45a96e8e56"},
+    {file = "vtk-9.3.0-cp311-cp311-win_amd64.whl", hash = "sha256:ff0eedcde5821c023623f70951f2499e9d59e709e288b67a2e2334abafacc322"},
+    {file = "vtk-9.3.0-cp312-cp312-macosx_10_10_x86_64.whl", hash = "sha256:94678fa0476e113500f3b99e9692b92b83a5b058caace7bac3b5f780b12b36ed"},
+    {file = "vtk-9.3.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:371b96afca3ed41a0bf1cd80a42f4b906ca2f470a13df32f39b22a9169d996d7"},
+    {file = "vtk-9.3.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5cfa8d73acbab386b9d6ef8a1a01149fd096a21a23547f10bf0cf98d88300724"},
+    {file = "vtk-9.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:75d27b73270a42923ebefd87a8522f7717618c36825b8058c4d3aa8e64d6145d"},
 ]
 
 [[package]]

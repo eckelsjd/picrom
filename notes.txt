@@ -12,3 +12,36 @@ Benchmark details:
 - Nx by Ny = 500x256
 - dt=5ps with tf=20us
 - 150 ppc
+
+
+TURF:
+Important files:
+- Experiment 3 outputs csv file has 3D data output details
+- TURFdata/16AB_1e9_Nd8/Plot3DExp3p2 has parts 1/2 vts files
+- Plot3DExp3p1 only has part 1 data before a failed restart
+- Update 4/28 slides have most recent results and links to scripts
+- TURF_CPU/src-TURF/tutorials/post_processing/*extract.py use vtk library to gather all the data from plot3dexp3p1
+- Boyd.csv files are hand-extracted from the original paper pdf, located in the post_processing folder
+
+Simulation details:
+- Experiment 3 replicates the Boyd paper
+- 16AB is the most recent/best version of experiment 3
+- green rows in .csv are the outputs that are saved
+- part1 --> neutrals only injected (up to iteration 1500)
+- part2 --> ions injected
+- weird time-average properties from part 1 are used to initialize part 2
+- part 1 dt=1e-5 s, part 2 dt=5e-6 s
+- vts files saved every 50 iterations up to 12500 iterations
+- thruster surface is triangular unstructured mesh
+- plume volume is a regular cubic/rectangular structured mesh
+- Nd8 = 8 subdomains used in TURF
+- only mesh field quantities are saved (not particles)
+- 8 .vts files per iteration, one for each subdomain
+
+Physics info:
+- electron fluid with DSMC/MCC neutral/Xe+ ?
+
+File formats:
+- .vts --> structured volume data (mesh quantities)
+- .vtr --> information about subdomain boundaries to visualize in paraview
+- .pvts/.vtm --> give info about how subdomains are connected

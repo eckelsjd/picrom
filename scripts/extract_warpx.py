@@ -36,7 +36,7 @@ def process_warpx_data(parallel=True):
         grid_spacing = fd[f'data/{iter_num}/fields/phi'].attrs['gridSpacing']
         dtype = str(fd[f'data/{iter_num}/fields/phi'].dtype)
 
-    # Make a dictionary to save snapshot matrices and important metadata
+    # Save snapshot matrices and important metadata
     with h5py.File('warpx.h5', 'a') as fd:
         if fd.get('fields') is not None:
             del fd['fields']
