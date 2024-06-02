@@ -45,3 +45,11 @@ File formats:
 - .vts --> structured volume data (mesh quantities)
 - .vtr --> information about subdomain boundaries to visualize in paraview
 - .pvts/.vtm --> give info about how subdomains are connected
+
+DMD issues:
+- average over time-delay coordinates?
+- rescaling of Atilde with the singular values before eigendecomposition?
+- L2 tikhanov regularization for least squares
+- can solve for amplitudes using more than just initial condition
+- exact vs. "projected" (default) DMD
+- DMD uses discrete time dynamics (convert to continous with log()/dt)

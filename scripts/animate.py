@@ -94,7 +94,7 @@ def get_turf_slice(qoi, loc=0, axis: str | int = 'y'):
     for i, subdomain in enumerate(subdomains):
         xs, ys, zs = [ele * sub_shape[j] for j, ele in enumerate(subdomain)]
         xe, ye, ze = xs+int(Nx/2), ys+int(Ny/2), zs+int(Nz/2)  # 8 equal cube subdomains
-        qoi_full[xs:xe, ys:ye, zs:ze] = qoi[..., i, :]
+        qoi_full[xs:xe, ys:ye, zs:ze, :] = qoi[..., i, :]
 
     # Find the indices of nearest slice locations
     domains = [(grid_domain[i, 0], grid_domain[i, 1]) for i in range(3)]  # For (x,y,z)
@@ -113,7 +113,7 @@ def animate_turf(qoi_use='ni', loc=0, axis='y'):
         grid_domain = attrs['grid_domain']
         dt = attrs['dt'] * attrs['iters_per_save']
         dz = 0.1  # m
-    cmap = 'viridis'
+    cmap = 'bwr'
     axes = ['x', 'y', 'z', 't']
     lx, ly, lz = 'Axial $x$ (m)', 'Radial $y$ (m)', 'Transverse $z$ (m)'
     xb, yb, zb = [grid_domain[i, :] for i in range(3)]
@@ -128,35 +128,35 @@ def animate_turf(qoi_use='ni', loc=0, axis='y'):
 
     match qoi_use:
         case 'ni':
-            scale = 1
-            qoi_label = r'Ion density (log $m^{-3}$)'
-            qoi = np.log10(qoi)
+            qoi_label = r'Ion density ($m^{-3}$)'
+            min_bound = 1e8
+            qoi[qoi < min_bound] = min_bound
         case 'nn':
-            scale = 1
-            qoi_label = r'Neutral density (log m^{-3}$)'
-            qoi = np.log10(qoi)
+            qoi_label = r'Neutral density (m^{-3}$)'
         case 'j':
-            scale = 1
             qoi_label = r'Ion current density (A/$m^2$)'
+            min_bound = 1e-8
 
     with matplotlib.rc_context(rc={'font.size': 15, 'font.family': 'STIXGeneral', 'mathtext.fontset': 'stix',
                                    'text.usetex': True}):
         fig, ax = plt.subplots(figsize=(5, 4), layout='tight')
-        im = ax.imshow(qoi[..., 0] / scale, cmap=cmap, origin='lower', extent=[*bounds[axis][0], *bounds[axis][1]])
+        im = ax.imshow(qoi[..., 0], cmap=cmap, origin='lower', extent=[*bounds[axis][0], *bounds[axis][1]], norm='log')
+        im.cmap.set_bad(im.cmap.get_under())
         im_ratio = N2 / N1
-        cb = fig.colorbar(im, label=qoi_label, fraction=0.046*im_ratio, pad=0.04, format='%5.1f')
+        cb = fig.colorbar(im, label=qoi_label, fraction=0.046*im_ratio, pad=0.04)
         ax.set_xlabel(labels[axis][0])
         ax.set_ylabel(labels[axis][1])
-        window = 2
+        window = 3
         skip = 1
 
         def animate(i):
             idx_use = i * skip
             curr_t = idx_use * dt
-            im.set_data(qoi[..., idx_use] / scale)
+            im.set_data(qoi[..., idx_use])
             l_idx = max(idx_use - window, 0)
             u_idx = min(idx_use + window, N3)
-            im.set_clim(np.min(qoi[..., l_idx:u_idx] / scale), np.max(qoi[..., l_idx:u_idx] / scale))
+            im.set_clim(max(min_bound, np.min(qoi[..., l_idx:u_idx])), np.max(qoi[..., l_idx:u_idx]))
+            im.cmap.set_bad(im.cmap.get_under())
             ax.set_title(r't = {} ms'.format(f'{curr_t*1e3:4.1f}') if axis < 3 else r'z = {} m'.format(f'{idx_use * dz}:4.1f'))
             return [im]
 
@@ -166,4 +166,4 @@ def animate_turf(qoi_use='ni', loc=0, axis='y'):
 
 if __name__ == '__main__':
     # animate_warpx(qoi_use='ni')
-    animate_turf(qoi_use='ni')
+    animate_turf(qoi_use='j', axis='y', loc=0)
