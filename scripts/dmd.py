@@ -263,23 +263,34 @@ def warpx():
         dz, dx = attrs['grid_spacing']
         dt = attrs['dt'] * attrs['iters_per_save']
         Nsave = int(attrs['Nsave'])
-        cmap = 'plasma'
-        qoi = fd[f'fields/ni'][:]  # (Nz, Nx, Nsave)
+        cmap = 'bwr'
+        qoi_full = fd[f'fields/ni'][:]  # (Nz, Nx, Nsave)
     t = np.arange(0, Nsave) * dt            # (s)
     x = np.arange(0, Nx) * dx * 100         # (cm)
     z = np.arange(0, Nz) * dz * 100         # (cm)
     idx_ss = np.argmin(np.abs(t-14e-6))     # Steady-state around 12 mu-s into simulation
-    qoi = qoi[..., idx_ss:]
+    qoi = qoi_full[..., idx_ss:]
     t = t[idx_ss:] - t[idx_ss]
     Nt = t.shape[0]
     sol_exact = np.swapaxes(qoi, 0, 1).reshape((-1, Nt))  # (Nstates, Ntime)
     Nstates = sol_exact.shape[0]
 
+    # with h5py.File('warpx_ni.h5', 'a') as fd:
+    #     group = fd.create_group('fields')
+    #     group.attrs.update({'dt': dt, 'grid_spacing': attrs['grid_spacing'], 'grid_shape': attrs['grid_shape'],
+    #                         'coords': ('N_x', 'N_y', 'N_time')})
+    #     fd.create_dataset('fields/ni', data=qoi_full)
+
     # Preprocessing and fit DMD
-    mu_X, std_X = np.mean(sol_exact), np.std(sol_exact)
-    g = lambda X: (X - mu_X) / std_X   # Transform
-    g_inv = lambda X: X * std_X + mu_X  # Inverse transform
-    r, delay = 0.99, 1
+    thresh = 1
+    idx = sol_exact < thresh
+    sol_exact[idx] = np.nan
+    new_thresh = np.nanmin(sol_exact)
+    sol_exact[idx] = new_thresh
+    mu_X, std_X = np.mean(np.log(sol_exact)), np.std(np.log(sol_exact))
+    g = lambda X: (np.log(X) - mu_X) / std_X    # Transform
+    g_inv = lambda X: np.exp(X * std_X + mu_X)  # Inverse transform
+    r, delay = 10, 1
     pct_train = 0.25
     num_train = round(pct_train * Nt)
     snapshot_matrix = g(sol_exact[:, :num_train])  # (Nstates, Ntrain)
@@ -291,6 +302,8 @@ def warpx():
     sol_dmd = phi @ np.diag(b) @ np.exp(t[np.newaxis, :] * omega[:, np.newaxis])  # (Nstates, Nt)
     sol_dmd = g_inv(sol_dmd.real)
     qoi_dmd = np.swapaxes(sol_dmd.reshape((Nx, Nz, Nt)), 0, 1)  # (Nz, Nx, Nt)
+    l2_error = relative_error(sol_exact, sol_dmd, axis=0)
+
     # opts = dict(tol=1e-4, eps_stall=1e-10, maxiter=30, maxlam=100, lamup=1.5, verbose=True, init_lambda=0.1)
     # dmd = hankel_preprocessing(BOPDMD(svd_rank=r, num_trials=1, varpro_opts_dict=opts,
     #                                   eig_constraints={'stable'}, bag_maxfail=100), d=delay)
@@ -300,12 +313,15 @@ def warpx():
 
     plot_summary(dmd, x=x, y=z, t=t[:num_train-delay+1], d=delay, snapshots_shape=(Nx, Nz), max_sval_plot=100)
 
-    vmin, vmax = np.min([sol_exact, sol_dmd]), np.max([sol_exact, sol_dmd])
+    qoi[qoi <= new_thresh] = np.nan
+    qoi_dmd[qoi_dmd <= new_thresh] = np.nan
+    vmin, vmax = np.nanmin([qoi[..., -1], qoi_dmd[..., -1]]), np.max([qoi[..., -1], qoi_dmd[..., -1]])
     imshow_args = {'extent': [0, x[-1], 0, z[-1]], 'origin': 'lower', 'vmin': vmin, 'vmax': vmax, 'cmap': cmap}
     with plt.style.context('uqtils.default'):
         with matplotlib.rc_context(rc={'font.size': 16}):
             # Ground truth final snapshot
-            fig, ax = plt.subplots(figsize=(7, 4), layout='tight')
+            figsize = (7, 4)
+            fig, ax = plt.subplots(figsize=figsize, layout='tight')
             im = ax.imshow(qoi[:, :, -1], **imshow_args)
             im_ratio = Nz / Nx
             cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
@@ -313,7 +329,7 @@ def warpx():
             ax.grid(visible=False)
 
             # DMD final snapshot
-            fig, ax = plt.subplots(figsize=(7, 4), layout='tight')
+            fig, ax = plt.subplots(figsize=figsize, layout='tight')
             im = ax.imshow(qoi_dmd[:, :, -1], **imshow_args)
             im_ratio = Nz / Nx
             cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
@@ -321,13 +337,23 @@ def warpx():
             ax.grid(visible=False)
 
             # L2 error over time
-            c=(244/255, 137/255, 70/255)
-            fig, ax = plt.subplots(figsize=(7, 4), layout='tight')
-            ax.plot(t*1e6, relative_error(sol_exact, sol_dmd, axis=0), '-k')
-            ax.axvspan(0, t[num_train]*1e6, alpha=0.2, color=c, label='Training period')
-            ax.axvline(t[num_train]*1e6, color=c, ls='--', lw=1)
+            c = plt.get_cmap(cmap)(0)
+            fig, ax = plt.subplots(figsize=figsize, layout='tight')
+            ax.plot(t * 1e6, l2_error, '-k')
+            ax.axvspan(0, t[num_train] * 1e6, alpha=0.2, color=c, label='Training period')
+            ax.axvline(t[num_train] * 1e6, color=c, ls='--', lw=1)
             ax.set_yscale('log')
-            uq.ax_default(ax, r'Time ($\mu$s)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
+            uq.ax_default(ax, r'Time (ms)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
+
+            # Singular value spectrum
+            s = np.linalg.svd(snapshot_matrix, full_matrices=False, compute_uv=False)
+            frac = s ** 2 / np.sum(s ** 2)
+            r = r if isinstance(r, int) else int(np.where(np.cumsum(frac) >= r)[0][0]) + 1
+            fig, ax = plt.subplots(figsize=(6, 5), layout='tight')
+            ax.plot(frac, '-ok', ms=3)
+            h, = ax.plot(frac[:r], 'or', ms=5, label=r'{}'.format(f'SVD rank $r={r}$'))
+            ax.set_yscale('log')
+            uq.ax_default(ax, 'Index', 'Fraction of total variance', legend={'loc': 'upper right'})
 
             plt.show()
 
@@ -355,20 +381,37 @@ def turf():
             xe, ye, ze = xs + int(Nx / 2), ys + int(Ny / 2), zs + int(Nz / 2)  # 8 equal cube subdomains
             qoi_full[xs:xe, ys:ye, zs:ze, :] = qoi[..., i, :]
 
+    # with h5py.File('turf_ni.h5', 'a') as fd:
+    #     group = fd.create_group('fields')
+    #     group.attrs.update({'dt': dt, 'grid_spacing': attrs['grid_spacing'], 'grid_shape': attrs['grid_shape'],
+    #                         'coords': ('N_x', 'N_y', 'N_z', 'N_time')})
+    #     fd.create_dataset('fields/ni', data=qoi_full)
+
+    slice_idx, slice_axis, idx_ss = 0, 2, 10
+    qoi_slice = np.take(qoi_full, slice_idx, axis=slice_axis).squeeze()  # 2d slice at z=0
     t = np.arange(0, Nsave) * dt            # (s)
     x = np.arange(0, Nx) * dx               # (m)
     y = np.arange(0, Ny) * dy               # (m)
     z = np.arange(0, Nz) * dz               # (m)
-    sol_exact = qoi_full.reshape((-1, Nsave))  # (Nstates, Ntime)
+    sol_exact = qoi_slice.reshape((-1, Nsave))  # (Nstates, Ntime)
+    sol_exact = sol_exact[:, idx_ss:]
+    t = t[idx_ss:] - t[idx_ss]
+    Nt = t.shape[0]
+    qoi_slice = qoi_slice[..., idx_ss:]
     Nstates = sol_exact.shape[0]
 
     # Preprocessing and fit DMD
-    mu_X, std_X = np.mean(np.log(sol_exact)), np.std(np.log(sol_exact))
+    thresh = 1
+    idx = sol_exact < thresh
+    sol_exact[idx] = np.nan
+    new_thresh = np.nanmin(sol_exact)
+    sol_exact[idx] = new_thresh
+    mu_X, std_X = 0, np.std(np.log(sol_exact))
     g = lambda X: (np.log(X) - mu_X) / std_X    # Transform
     g_inv = lambda X: np.exp(X * std_X + mu_X)  # Inverse transform
-    r, delay = 5, 1
+    r, delay = 10, 1
     pct_train = 0.25
-    num_train = round(pct_train * Nsave)
+    num_train = round(pct_train * Nt)
     snapshot_matrix = g(sol_exact[:, :num_train])  # (Nstates, Ntrain)
     dmd = hankel_preprocessing(DMD(svd_rank=r), d=delay)
     dmd.fit(snapshot_matrix)
@@ -377,7 +420,9 @@ def turf():
     omega = np.log(lamb) / dt  # Continuous time eigenvalues
     sol_dmd = phi @ np.diag(b) @ np.exp(t[np.newaxis, :] * omega[:, np.newaxis])  # (Nstates, Nt)
     sol_dmd = g_inv(sol_dmd.real)
-    qoi_dmd = sol_dmd.reshape((Nx, Ny, Nz, Nsave))
+    qoi_dmd = sol_dmd.reshape((Nx, Ny, Nt))
+    l2_error = relative_error(sol_exact, sol_dmd, axis=0)
+
     # opts = dict(tol=1e-4, eps_stall=1e-10, maxiter=30, maxlam=100, lamup=1.5, verbose=True, init_lambda=0.1)
     # dmd = hankel_preprocessing(BOPDMD(svd_rank=r, num_trials=1, varpro_opts_dict=opts,
     #                                   eig_constraints={'stable'}, bag_maxfail=100), d=delay)
@@ -385,50 +430,60 @@ def turf():
     # sol_dmd = g_inv(dmd.forecast(t)[:Nstates, :].real)
     # qoi_dmd = np.swapaxes(sol_dmd.reshape((Nx, Nz, Nt)), 0, 1)  # (Nz, Nx, Nt)
 
-    # plot_summary(dmd, t=t[:num_train-delay+1], d=delay, max_sval_plot=100)
+    plot_summary(dmd, x=x, y=y, snapshots_shape=(Nx, Ny), t=t[:num_train-delay+1], d=delay, max_sval_plot=100)
 
-    # Plot x-y 2d slices at z=0
-    slice_idx = 0
-    vmin, vmax = np.min([sol_exact, sol_dmd]), np.max([sol_exact, sol_dmd])
+    qoi_slice[qoi_slice <= new_thresh] = np.nan
+    qoi_dmd[qoi_dmd <= new_thresh] = np.nan
+    vmin, vmax = np.nanmin([qoi_slice[..., -1], qoi_dmd[..., -1]]), np.nanmax([qoi_slice[..., -1], qoi_dmd[..., -1]])
     imshow_args = {'extent': [0, x[-1], 0, y[-1]], 'origin': 'lower', 'vmin': vmin, 'vmax': vmax, 'cmap': cmap,
                    'norm': 'log'}
     with plt.style.context('uqtils.default'):
-        with matplotlib.rc_context(rc={'font.size': 16}):
-            # Ground truth final snapshot
-            fig, ax = plt.subplots(figsize=(5, 4), layout='tight')
-            slice_qoi = np.swapaxes(np.take(qoi_full, slice_idx, axis=2).squeeze(), 0, 1)  # (Ny, Nx)
-            im = ax.imshow(slice_qoi[:, :, -1], **imshow_args)
-            im.cmap.set_bad(im.cmap.get_under())
-            im_ratio = Ny / Nx
-            cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
-            uq.ax_default(ax, r'Axial direction $z$ (m)', r'Radial direction $r$ (m)', legend=False)
-            ax.grid(visible=False)
+        # Ground truth final snapshot
+        figsize = (6, 5)
+        fig, ax = plt.subplots(figsize=figsize, layout='tight')
+        im_slice = qoi_slice[:, :, -1].T  # (Ny, Nx)
+        im = ax.imshow(im_slice, **imshow_args)
+        im.cmap.set_bad(im.cmap.get_under())
+        im_ratio = Ny / Nx
+        cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.046*im_ratio, pad=0.04)
+        uq.ax_default(ax, r'Axial direction $z$ (m)', r'Radial direction $r$ (m)', legend=False)
+        ax.grid(visible=False)
 
-            # DMD final snapshot
-            fig, ax = plt.subplots(figsize=(5, 4), layout='tight')
-            slice_qoi = np.swapaxes(np.take(qoi_dmd, slice_idx, axis=2).squeeze(), 0, 1)
-            im = ax.imshow(slice_qoi[:, :, -1], **imshow_args)
-            im.cmap.set_bad(im.cmap.get_under())
-            im_ratio = Ny / Nx
-            cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
-            uq.ax_default(ax, r'Axial direction $z$ (m)', r'Radial direction $r$ (m)', legend=False)
-            ax.grid(visible=False)
+        # DMD final snapshot
+        fig, ax = plt.subplots(figsize=figsize, layout='tight')
+        im_slice = qoi_dmd[:, :, -1].T  # (Ny, Nx)
+        im = ax.imshow(im_slice, **imshow_args)
+        im.cmap.set_bad(im.cmap.get_under())
+        im_ratio = Ny / Nx
+        cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.046*im_ratio, pad=0.04)
+        uq.ax_default(ax, r'Axial direction $z$ (m)', r'Radial direction $r$ (m)', legend=False)
+        ax.grid(visible=False)
 
-            # L2 error over time
-            c = (244/255, 137/255, 70/255)
-            fig, ax = plt.subplots(figsize=(5, 4), layout='tight')
-            ax.plot(t*1e3, relative_error(sol_exact, sol_dmd, axis=0), '-k')
-            ax.axvspan(0, t[num_train]*1e3, alpha=0.2, color=c, label='Training period')
-            ax.axvline(t[num_train]*1e3, color=c, ls='--', lw=1)
-            ax.set_yscale('log')
-            uq.ax_default(ax, r'Time (ms)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
+        # L2 error over time
+        c = 'b'
+        fig, ax = plt.subplots(figsize=figsize, layout='tight')
+        ax.plot(t*1e3, l2_error, '-k')
+        ax.axvspan(0, t[num_train]*1e3, alpha=0.2, color=c, label='Training period')
+        ax.axvline(t[num_train]*1e3, color=c, ls='--', lw=1)
+        ax.set_yscale('log')
+        uq.ax_default(ax, r'Time (ms)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
 
-            plt.show()
+        # Singular value spectrum
+        s = np.linalg.svd(snapshot_matrix, full_matrices=False, compute_uv=False)
+        frac = s ** 2 / np.sum(s ** 2)
+        r = r if isinstance(r, int) else int(np.where(np.cumsum(frac) >= r)[0][0]) + 1
+        fig, ax = plt.subplots(figsize=figsize, layout='tight')
+        ax.plot(frac, '-ok', ms=3)
+        h, = ax.plot(frac[:r], 'or', ms=5, label=r'{}'.format(f'SVD rank $r={r}$'))
+        ax.set_yscale('log')
+        uq.ax_default(ax, 'Index', 'Fraction of total variance', legend={'loc': 'upper right'})
+
+        plt.show()
 
 
 if __name__ == '__main__':
     # tutorial()
     # diffusion_equation()
     # burgers_equation()
-    # warpx()
-    turf()
+    warpx()
+    # turf()
