@@ -387,12 +387,12 @@ def warpx():
     Nstates = sol_exact.shape[0]
 
     # Preprocessing
-    r = 77
+    r = 76
     pct_train = 0.5
     norm_method = 'log'
     norm1, norm2 = 'log', 'none'
     num_train = round(pct_train * Nt)
-    dmd_method = 'tensor'
+    dmd_method = 'exact'
     eps = 0.001  # TT reconstruction accuracy
     consts = None
 
@@ -404,18 +404,19 @@ def warpx():
                 print(f'{"Min": >10} {"Max": >10} {"Mean": >10} {"Median": >10} {"Std": >10}')
                 print(f'{data.min(): >10.5f} {data.max(): >10.5f} {np.mean(data): >10.5f} {np.median(data): >10.5f} {np.std(data): >10.5f}')
         case 'tensor':
-            # base_path = Path(r'C:\Users\eckel\Dropbox (University of Michigan)\compressed_turf_warpx_rom\warpx')
-            base_path = Path('.')
-            tcc_file = f'warpx_first150_ni_compressed_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.ttc'
-            latent_file = f'warpx_first150_ni_latent_data_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.npy'
+            base_path = Path('../results/warpx')
+            tcc_file = f'warpx_ni_compressed_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.ttc'
+            latent_file = f'warpx_ni_latent_data_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.npy'
             ttObj = dmt.ttObject.loadData(str((base_path/tcc_file).resolve()))
-            snapshot_matrix = np.load(base_path / latent_file)  # (Nlatent, Ntrain)
-            rec = ttObj.reconstruct(snapshot_matrix).reshape(qoi.shape)
+            latent_data = np.load(base_path / latent_file)  # (Nlatent, Ntrain)
+            snapshot_matrix = latent_data[:, :num_train]
+            rec = ttObj.reconstruct(snapshot_matrix).reshape(qoi[..., :num_train].shape)
             rec_denorm = denormalize(rec, method=norm_method, consts=consts)
-            targ, _ = normalize(qoi, method=norm_method)
+            targ, _ = normalize(qoi[..., :num_train], method=norm_method)
             r = snapshot_matrix.shape[0]  # Use all the TT-latent space for DMD
             print(f'Normalized reconstruction L2 max error: {np.max(relative_error(targ, rec, axis=(0, 1)))}')
-            print(f'Unnormalized reconstruction L2 max error: {np.max(relative_error(qoi, rec_denorm, axis=(0, 1)))}')
+            print(
+                f'Unnormalized reconstruction L2 max error: {np.max(relative_error(qoi[..., :num_train], rec_denorm, axis=(0, 1)))}')
 
     # Exact-DMD
     dmd = DMD(svd_rank=r, exact=False)
@@ -435,19 +436,10 @@ def warpx():
     qoi_dmd = sol_dmd.reshape((Nz, Nx, Nt))  # (Nz, Nx, Nt)
     l2_error = relative_error(qoi, qoi_dmd, axis=(0, 1))
 
-    # Other-DMD
-    # opts = dict(tol=1e-4, eps_stall=1e-10, maxiter=30, maxlam=100, lamup=1.5, verbose=True, init_lambda=0.1)
-    # dmd = hankel_preprocessing(BOPDMD(svd_rank=r, num_trials=1, varpro_opts_dict=opts,
-    #                                   eig_constraints={'stable'}, bag_maxfail=100), d=delay)
-    # dmd.fit(snapshot_matrix, t=t[:num_train-delay+1])
-    # sol_dmd = g_inv(dmd.forecast(t)[:Nstates, :].real)
-    # qoi_dmd = np.swapaxes(sol_dmd.reshape((Nx, Nz, Nt)), 0, 1)  # (Nz, Nx, Nt)
-    # plot_summary(dmd, x=x, y=z, t=t[:num_train], snapshots_shape=(Nx, Nz), max_sval_plot=100)
-
     thresh = 10
     qoi[qoi <= thresh] = np.nan
     qoi_dmd[qoi_dmd <= thresh] = np.nan  # For plotting
-    vmin, vmax = np.nanmin([qoi[..., -1], qoi_dmd[..., -1]]), np.max([qoi[..., -1], qoi_dmd[..., -1]])
+    vmin, vmax = np.nanmin([qoi[..., -1], qoi_dmd[..., -1]]), np.nanmax([qoi[..., -1], qoi_dmd[..., -1]])
     imshow_args = {'extent': [0, x[-1], 0, z[-1]], 'origin': 'lower', 'vmin': vmin, 'vmax': vmax, 'cmap': cmap}
     with plt.style.context('uqtils.default'):
         with matplotlib.rc_context(rc={'font.size': 16}):
@@ -459,6 +451,7 @@ def warpx():
             cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
             uq.ax_default(ax, r'Axial direction $x$ (cm)', r'Azimuthal direction $y$ (cm)', legend=False)
             ax.grid(visible=False)
+            fig.savefig('warpx_truth_final.pdf', bbox_inches='tight', format='pdf')
             plt.show(block=False)
 
             # DMD final snapshot
@@ -468,6 +461,7 @@ def warpx():
             cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
             uq.ax_default(ax, r'Axial direction $x$ (cm)', r'Azimuthal direction $y$ (cm)', legend=False)
             ax.grid(visible=False)
+            fig.savefig(f'warpx_{dmd_method}_final_r={r}.pdf', bbox_inches='tight', format='pdf')
             plt.show(block=False)
 
             # L2 error over time
@@ -478,6 +472,7 @@ def warpx():
             ax.axvline(t[num_train] * 1e6, color=c, ls='--', lw=1)
             ax.set_yscale('log')
             uq.ax_default(ax, r'Time ($\mu$s)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
+            fig.savefig(f'warpx_{dmd_method}_error_r={r}.pdf', bbox_inches='tight', format='pdf')
             plt.show(block=False)
 
             # Singular value spectrum
@@ -489,6 +484,7 @@ def warpx():
             h, = ax.plot(frac[:r], 'or', ms=5, label=r'{}'.format(f'SVD rank $r={r}$'))
             ax.set_yscale('log')
             uq.ax_default(ax, 'Index', 'Fraction of total variance', legend={'loc': 'upper right'})
+            fig.savefig(f'warpx_{dmd_method}_svals_r={r}.pdf', bbox_inches='tight', format='pdf')
             plt.show(block=False)
 
             plt.show()
@@ -587,8 +583,6 @@ def turf():
     #     Nsave = qoi.shape[-1]
     #     cmap = 'bwr'
 
-    # slice_idx, slice_axis = 0, 2
-    # qoi_slice = np.take(qoi_full, slice_idx, axis=slice_axis).squeeze()  # 2d slice at z=0
     idx_ss = 10
     t = np.arange(0, Nsave) * dt            # (s)
     x = np.arange(0, Nx) * dx               # (m)
@@ -598,15 +592,15 @@ def turf():
     Nt = qoi.shape[-1]
     sol_exact = qoi.reshape((-1, Nt))  # (Nstates, Ntime)
     t = t[idx_ss:] - t[idx_ss]
-    Nstates = sol_exact.shape[0]
 
     # Preprocessing
-    r = 50
+    r = 112
     pct_train = 0.5
     norm_method = 'log'
+    norm1, norm2 = norm_method, 'none'
     num_train = round(pct_train * Nt)
     dmd_method = 'exact'
-    eps = 0.000001  # TT reconstruction accuracy
+    eps = 0.03  # TT reconstruction accuracy
     consts = None
 
     match dmd_method:
@@ -617,7 +611,18 @@ def turf():
                 print(f'{"Min": >10} {"Max": >10} {"Mean": >10} {"Median": >10} {"Std": >10}')
                 print(f'{data.min(): >10.5f} {data.max(): >10.5f} {np.mean(data): >10.5f} {np.median(data): >10.5f} {np.std(data): >10.5f}')
         case 'tensor':
-            pass
+            base_path = Path('../results/turf')
+            tcc_file = f'turf_ni_compressed_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.ttc'
+            latent_file = f'turf_ni_latent_data_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.npy'
+            ttObj = dmt.ttObject.loadData(str((base_path / tcc_file).resolve()))
+            latent_data = np.load(base_path / latent_file)  # (Nlatent, Ntime)
+            snapshot_matrix = latent_data[:, :num_train]
+            rec = ttObj.reconstruct(snapshot_matrix).reshape(qoi[..., :num_train].shape)
+            rec_denorm = denormalize(rec, method=norm_method, consts=consts)
+            targ, _ = normalize(qoi[..., :num_train], method=norm_method)
+            r = snapshot_matrix.shape[0]  # Use all the TT-latent space for DMD
+            print(f'Normalized reconstruction L2 max error: {np.max(relative_error(targ, rec, axis=(0, 1, 2)))}')
+            print(f'Unnormalized reconstruction L2 max error: {np.max(relative_error(qoi[..., :num_train], rec_denorm, axis=(0, 1, 2)))}')
 
     # Exact-DMD
     dmd = DMD(svd_rank=r)
@@ -631,12 +636,11 @@ def turf():
         case 'exact':
             sol_dmd = denormalize(sol_dmd.real, method=norm_method, consts=consts)
         case 'tensor':
-            pass
-            # sol_dmd = ttObj.reconstruct(sol_dmd.real)
-            # sol_dmd = denormalize(sol_dmd, method=norm_method, consts=consts)
+            sol_dmd = ttObj.reconstruct(sol_dmd.real)
+            sol_dmd = denormalize(sol_dmd, method=norm_method, consts=consts)
 
     qoi_dmd = sol_dmd.reshape((Nx, Ny, Nz, Nt))
-    l2_error = relative_error(sol_exact, sol_dmd, axis=0)
+    l2_error = relative_error(qoi, qoi_dmd, axis=(0, 1, 2))
 
     thresh = 10
     qoi[qoi <= thresh] = np.nan
@@ -687,6 +691,7 @@ def turf():
         ax.axvline(t[num_train]*1e3, color=c, ls='--', lw=1)
         ax.set_yscale('log')
         uq.ax_default(ax, r'Time (ms)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
+        fig.savefig(f'turf_{dmd_method}_error_r={r}.pdf', bbox_inches='tight', format='pdf')
         plt.show(block=False)
 
         # Singular value spectrum
@@ -698,6 +703,7 @@ def turf():
         h, = ax.plot(frac[:r], 'or', ms=5, label=r'{}'.format(f'SVD rank $r={r}$'))
         ax.set_yscale('log')
         uq.ax_default(ax, 'Index', 'Fraction of total variance', legend={'loc': 'upper right'})
+        fig.savefig(f'turf_{dmd_method}_svals_r={r}.pdf', bbox_inches='tight', format='pdf')
         plt.show(block=False)
 
         plt.show()
@@ -707,5 +713,5 @@ if __name__ == '__main__':
     # tutorial()
     # diffusion_equation()
     # burgers_equation()
-    # warpx()
-    turf()
+    warpx()
+    # turf()
