@@ -21,17 +21,17 @@ else
 fi
 
 pdm install
-pdm run jupyter_install  # pdm doesn't install jupyterlab correctly for some reason
+# pdm run jupyter_install  # pdm doesn't install jupyterlab correctly for some reason
 
 # Add slurm user account info to .bashrc
 if [[ -z "${SLURM_ACCOUNT}" || -z "${SLURM_MAIL}" ]]; then
   case $(whoami) in
     eckelsjd)
-      export SLURM_ACCOUNT='goroda0'
+      export SLURM_ACCOUNT='goroda1'
       export SLURM_MAIL='eckelsjd@umich.edu'
       ;;
     *)
-      export SLURM_ACCOUNT='goroda0'
+      export SLURM_ACCOUNT='goroda1'
       export SLURM_MAIL='eckelsjd@umich.edu'
       ;;
   esac

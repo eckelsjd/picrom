@@ -11,12 +11,71 @@ import tqdm
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 import uqtils as uq
+import yt
 
 K_TO_EV = constants.physical_constants['kelvin-electron volt relationship'][0]
 
 
+def process_warpx_amrex(parallel=True):
+    """Convert warpx (amrex) data into snapshot matrices of specific quantities of interest."""
+    root_dir = Path('../results/steady_10us_checkpoint')
+    base_path = root_dir / 'diags'
+    plotfile_key = 'hall'
+    data_dirs = sorted([f for f in os.listdir(base_path) if Path(f).is_dir() and f.startswith(plotfile_key)],
+                       key=lambda ele: int(ele.split(plotfile_key)[1]))
+    Nsave = len(data_dirs)
+
+    # Get important metadata
+    ds = yt.load(base_path / data_dirs[0])
+    iters_per_save = int(data_dirs[1].split('hall')[1]) - int(data_dirs[0].split('hall')[1])
+    left_edge = ds.domain_left_edge
+    dims = ds.domain_dimensions
+    grid_shape = tuple(dims[:-1])
+    cov_grid = ds.covering_grid(level=0, left_edge=left_edge, dims=dims)
+    grid_spacing = (np.max(cov_grid['dx'].to_ndarray()), np.max(cov_grid['dy'].to_ndarray()))
+
+    # Save snapshot matrices and metadata
+    with h5py.File('warpx_amrex.h5', 'a') as fd:
+        if fd.get('fields') is not None:
+            del fd['fields']
+        dt = 5e-12
+        group = fd.create_group('fields')
+        group.attrs.update({'dt': dt, 'grid_spacing': grid_spacing, 'Nsave': Nsave, 'iters_per_save': iters_per_save,
+                            'coords': ['Axial (x)', 'Azimuthal (y)'], 'grid_shape': grid_shape})
+
+    def parallel_func(idx, Ey_mat, ni_mat):
+        """Obtain QoI data from a given warp-x plotfile (amrex) directory (one timestep per directory)"""
+        print(f'Processing idx {idx} -- file {data_dirs[idx]}')
+        ds = yt.load(base_path / data_dirs[idx])
+        cov_grid = ds.covering_grid(level=0, left_edge=ds.domain_left_edge, dims=ds.domain_dimensions)
+
+        with h5py.File(base_path / data_dirs[idx], 'r') as fd:
+            Ey_mat[..., idx] = cov_grid['Ey'].to_ndarray().squeeze()
+            ni_mat[..., idx] = - cov_grid['rho_ions'].to_ndarray().squeeze() / constants.e  # Amrex has (-) for ions?
+
+    with (tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as Ey_fd,
+          tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as ni_fd):
+
+        snap_shape = grid_shape + (Nsave,)
+        Ey_mat = np.memmap(Ey_fd.name, dtype='float64', mode='r+', shape=snap_shape)
+        ni_mat = np.memmap(ni_fd.name, dtype='float64', mode='r+', shape=snap_shape)
+
+        if parallel:
+            with Parallel(n_jobs=-1, verbose=10) as ppool:
+                ppool(delayed(parallel_func)(idx, Ey_mat, ni_mat) for idx in range(Nsave))
+        else:
+            for idx in tqdm.tqdm(range(Nsave)):
+                parallel_func(idx, Ey_mat, ni_mat)
+
+        with h5py.File('warpx_amrex.h5', 'a') as fd:
+            fd.create_dataset('fields/Ey', data=Ey_mat)
+            fd.create_dataset('fields/ni', data=ni_mat)
+            fd['fields/Ey'].attrs['units'] = 'V/m'
+            fd['fields/ni'].attrs['units'] = 'm**(-3)'
+
+
 def process_warpx_data(parallel=True):
-    """Convert warpx data into snapshot matrices of specific quantities of interest.
+    """Convert warpx (openpmd) data into snapshot matrices of specific quantities of interest.
 
     ASSUMPTIONS:
     - one file per timestep, all in the same directory, with .h5 extension following openpmd standard
@@ -240,5 +299,6 @@ def process_turf_data(parallel=True):
 
 
 if __name__ == "__main__":
+    process_warpx_amrex(parallel=True)
     # process_warx_data(parallel=True)
-    process_turf_data(parallel=True)
+    # process_turf_data(parallel=True)
