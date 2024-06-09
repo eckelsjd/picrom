@@ -8,57 +8,61 @@ import matplotlib
 
 
 def animate_warpx(qoi_use='ni'):
-    with h5py.File('warpx.h5', 'r') as fd:
+    with h5py.File('warpx_amrex.h5', 'r') as fd:
         attrs = dict(fd['fields'].attrs)
-        Nz, Nx = attrs['grid_shape']
-        dz, dx = attrs['grid_spacing']
+        Nx, Ny = attrs['grid_shape']
+        dx, dy = attrs['grid_spacing']
         dt = attrs['dt'] * attrs['iters_per_save']
         Nsave = attrs['Nsave']
-        cmap = 'bwr'
-        qoi = fd[f'fields/{qoi_use}'][:]  # (Nz, Nx, Nsave)
+        cmap = 'jet'
+        qoi = fd[f'fields/{qoi_use}'][:]  # (Nx, Ny, Nsave)
         match qoi_use:
             case 'ni':
-                scale = 1e18
-                qoi_label = r'Ion density ($10^{18} m^{-3}$)'
-            case 'Te':
-                scale = 1
-                qoi_label = r'Electron temperature (eV)'
-            case 'Ex':
-                scale = 1e4
-                qoi_label = r'Axial electric field ($10^4$ V/m)'
-                qoi = qoi[:, 10:-10, :]
-            case 'Ez':
-                scale = 1e4
-                qoi_label = r'Azimuthal electric field ($10^4$ V/m)'
+                norm = 'log'
+                qoi_label = r'Ion density ($m^{-3}$)'
+            case 'Ey':
+                norm = 'linear'
+                qoi_label = r'Azimuthal electric field (V/m)'
 
     # t = np.arange(0, Nsave) * dt
     # x = np.arange(0, Nx) * dx * 100
     # z = np.arange(0, Nz) * dz * 100
     # xg, zg = np.meshgrid(x, z)  # (Nz, Nx)
 
+    # Preprocessing and plot
+    thresh = 10
+    x_cut = 40
+    qoi_plot = np.transpose(qoi, axes=(1, 0, 2))  # (Ny, Nx, Nt)
+    qoi_plot[qoi_plot < thresh] = np.nan
+    qoi_plot[:, :x_cut, :] = np.nan
+    qoi_plot[:, -x_cut:, :] = np.nan
+    vmin, vmax = np.nanmin(qoi_plot), np.nanmax(qoi_plot)
     with matplotlib.rc_context(rc={'font.size': 15, 'font.family': 'STIXGeneral', 'mathtext.fontset': 'stix',
                                    'text.usetex': True}):
         fig, ax = plt.subplots(figsize=(7, 4), layout='tight')
-        im = ax.imshow(qoi[..., 0], cmap=cmap, origin='lower', extent=[0, qoi.shape[1]*dx*100, 0, qoi.shape[0]*dz*100])
-        im_ratio = Nz / Nx
-        cb = fig.colorbar(im, label=qoi_label, fraction=0.046*im_ratio, pad=0.04, format='%5.1f')
-        ax.set_xlabel(r'Axial direction $z$ (cm)')
-        ax.set_ylabel(r'Azimuthal direction $\theta$ (cm)')
+        im = ax.imshow(qoi_plot[..., 0], cmap=cmap, origin='lower', norm=norm, vmin=vmin, vmax=vmax,
+                       extent=[0, qoi_plot.shape[1]*dx*100, 0, qoi.shape[1]*dy*100])
+        im.cmap.set_bad((1, 1, 1, 1))
+        im_ratio = Ny / Nx
+        cb = fig.colorbar(im, label=qoi_label, fraction=0.046*im_ratio, pad=0.04)
+        ax.set_xlabel(r'Axial direction $x$ (cm)')
+        ax.set_ylabel(r'Azimuthal direction $y$ (cm)')
         skip = 2
         window = 20
 
         def animate(i):
             idx_use = i * skip
             curr_t = idx_use * dt
-            im.set_data(qoi[..., idx_use] / scale)
-            l_idx = max(idx_use - window, 0)
-            u_idx = min(idx_use + window, Nsave)
-            im.set_clim(np.min(qoi[..., l_idx:u_idx] / scale), np.max(qoi[..., l_idx:u_idx] / scale))
+            im.set_data(qoi_plot[..., idx_use])
+            # l_idx = max(idx_use - window, 0)
+            # u_idx = min(idx_use + window, Nsave)
+            # im.set_clim(np.nanmin(qoi_plot[..., l_idx:u_idx]), np.nanmax(qoi_plot[..., l_idx:u_idx]))
+            im.cmap.set_bad((1, 1, 1, 1))
             ax.set_title(r't = {} $\mu$s'.format(f'{curr_t*1e6:4.1f}'))
             return [im]
 
         ani = FuncAnimation(fig, animate, frames=int(Nsave/skip), interval=30, blit=True)
-        ani.save(f'warpx-{qoi_use}.gif')
+        ani.save(f'warpx_amrex-{qoi_use}.gif')
 
 
 def get_turf_slice(qoi, loc=0, axis: str | int = 'y'):
@@ -165,5 +169,5 @@ def animate_turf(qoi_use='ni', loc=0, axis='y'):
 
 
 if __name__ == '__main__':
-    # animate_warpx(qoi_use='ni')
-    animate_turf(qoi_use='j', axis='y', loc=0)
+    animate_warpx(qoi_use='Ey')
+    # animate_turf(qoi_use='j', axis='y', loc=0)

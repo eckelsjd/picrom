@@ -21,7 +21,7 @@ def process_warpx_amrex(parallel=True):
     root_dir = Path('../results/steady_10us_checkpoint')
     base_path = root_dir / 'diags'
     plotfile_key = 'hall'
-    data_dirs = sorted([f for f in os.listdir(base_path) if Path(f).is_dir() and f.startswith(plotfile_key)],
+    data_dirs = sorted([f for f in os.listdir(base_path) if (base_path/f).is_dir() and f.startswith(plotfile_key)],
                        key=lambda ele: int(ele.split(plotfile_key)[1]))
     Nsave = len(data_dirs)
 
@@ -48,10 +48,8 @@ def process_warpx_amrex(parallel=True):
         print(f'Processing idx {idx} -- file {data_dirs[idx]}')
         ds = yt.load(base_path / data_dirs[idx])
         cov_grid = ds.covering_grid(level=0, left_edge=ds.domain_left_edge, dims=ds.domain_dimensions)
-
-        with h5py.File(base_path / data_dirs[idx], 'r') as fd:
-            Ey_mat[..., idx] = cov_grid['Ey'].to_ndarray().squeeze()
-            ni_mat[..., idx] = - cov_grid['rho_ions'].to_ndarray().squeeze() / constants.e  # Amrex has (-) for ions?
+        Ey_mat[..., idx] = cov_grid['Ey'].to_ndarray().squeeze()
+        ni_mat[..., idx] = - cov_grid['rho_ions'].to_ndarray().squeeze() / constants.e  # Amrex has (-) for ions?
 
     with (tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as Ey_fd,
           tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as ni_fd):
