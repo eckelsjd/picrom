@@ -43,32 +43,32 @@ def process_warpx_amrex(parallel=True):
         group.attrs.update({'dt': dt, 'grid_spacing': grid_spacing, 'Nsave': Nsave, 'iters_per_save': iters_per_save,
                             'coords': ['Axial (x)', 'Azimuthal (y)'], 'grid_shape': grid_shape})
 
-    def parallel_func(idx, Ey_mat, ni_mat):
+    def parallel_func(idx, Ez_mat, ni_mat):
         """Obtain QoI data from a given warp-x plotfile (amrex) directory (one timestep per directory)"""
         print(f'Processing idx {idx} -- file {data_dirs[idx]}')
         ds = yt.load(base_path / data_dirs[idx])
         cov_grid = ds.covering_grid(level=0, left_edge=ds.domain_left_edge, dims=ds.domain_dimensions)
-        Ey_mat[..., idx] = cov_grid['Ey'].to_ndarray().squeeze()
+        Ez_mat[..., idx] = cov_grid['Ez'].to_ndarray().squeeze()
         ni_mat[..., idx] = - cov_grid['rho_ions'].to_ndarray().squeeze() / constants.e  # Amrex has (-) for ions?
 
-    with (tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as Ey_fd,
+    with (tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as Ez_fd,
           tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as ni_fd):
 
         snap_shape = grid_shape + (Nsave,)
-        Ey_mat = np.memmap(Ey_fd.name, dtype='float64', mode='r+', shape=snap_shape)
+        Ez_mat = np.memmap(Ez_fd.name, dtype='float64', mode='r+', shape=snap_shape)
         ni_mat = np.memmap(ni_fd.name, dtype='float64', mode='r+', shape=snap_shape)
 
         if parallel:
             with Parallel(n_jobs=-1, verbose=10) as ppool:
-                ppool(delayed(parallel_func)(idx, Ey_mat, ni_mat) for idx in range(Nsave))
+                ppool(delayed(parallel_func)(idx, Ez_mat, ni_mat) for idx in range(Nsave))
         else:
             for idx in tqdm.tqdm(range(Nsave)):
-                parallel_func(idx, Ey_mat, ni_mat)
+                parallel_func(idx, Ez_mat, ni_mat)
 
         with h5py.File('warpx_amrex.h5', 'a') as fd:
-            fd.create_dataset('fields/Ey', data=Ey_mat)
+            fd.create_dataset('fields/Ez', data=Ez_mat)
             fd.create_dataset('fields/ni', data=ni_mat)
-            fd['fields/Ey'].attrs['units'] = 'V/m'
+            fd['fields/Ez'].attrs['units'] = 'V/m'
             fd['fields/ni'].attrs['units'] = 'm**(-3)'
 
 

@@ -20,7 +20,7 @@ def animate_warpx(qoi_use='ni'):
             case 'ni':
                 norm = 'log'
                 qoi_label = r'Ion density ($m^{-3}$)'
-            case 'Ey':
+            case 'Ez':
                 norm = 'linear'
                 qoi_label = r'Azimuthal electric field (V/m)'
 
