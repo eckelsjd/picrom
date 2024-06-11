@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import tempfile
+import itertools
 
 import numpy as np
 import h5py
@@ -18,7 +19,7 @@ K_TO_EV = constants.physical_constants['kelvin-electron volt relationship'][0]
 
 def process_warpx_amrex(parallel=True):
     """Convert warpx (amrex) data into snapshot matrices of specific quantities of interest."""
-    root_dir = Path('../results/steady_10us_checkpoint')
+    root_dir = Path('../results/baseline_20us')
     base_path = root_dir / 'diags'
     plotfile_key = 'hall'
     data_dirs = sorted([f for f in os.listdir(base_path) if (base_path/f).is_dir() and f.startswith(plotfile_key)],
@@ -43,33 +44,48 @@ def process_warpx_amrex(parallel=True):
         group.attrs.update({'dt': dt, 'grid_spacing': grid_spacing, 'Nsave': Nsave, 'iters_per_save': iters_per_save,
                             'coords': ['Axial (x)', 'Azimuthal (y)'], 'grid_shape': grid_shape})
 
-    def parallel_func(idx, Ez_mat, ni_mat):
+    def parallel_func(idx, Ez_mat, ni_mat, jx_mat, jy_mat, jz_mat):
         """Obtain QoI data from a given warp-x plotfile (amrex) directory (one timestep per directory)"""
         print(f'Processing idx {idx} -- file {data_dirs[idx]}')
         ds = yt.load(base_path / data_dirs[idx])
         cov_grid = ds.covering_grid(level=0, left_edge=ds.domain_left_edge, dims=ds.domain_dimensions)
         Ez_mat[..., idx] = cov_grid['Ez'].to_ndarray().squeeze()
         ni_mat[..., idx] = - cov_grid['rho_ions'].to_ndarray().squeeze() / constants.e  # Amrex has (-) for ions?
+        jx_mat[..., idx] = cov_grid['jx'].to_ndarray().squeeze()
+        jy_mat[..., idx] = cov_grid['jy'].to_ndarray().squeeze()
+        jz_mat[..., idx] = cov_grid['jz'].to_ndarray().squeeze()
 
     with (tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as Ez_fd,
-          tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as ni_fd):
+          tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as ni_fd,
+          tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as jx_fd,
+          tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as jy_fd,
+          tempfile.NamedTemporaryFile(suffix='.dat', mode='w+b') as jz_fd):
 
         snap_shape = grid_shape + (Nsave,)
         Ez_mat = np.memmap(Ez_fd.name, dtype='float64', mode='r+', shape=snap_shape)
         ni_mat = np.memmap(ni_fd.name, dtype='float64', mode='r+', shape=snap_shape)
+        jx_mat = np.memmap(jx_fd.name, dtype='float64', mode='r+', shape=snap_shape)
+        jy_mat = np.memmap(jy_fd.name, dtype='float64', mode='r+', shape=snap_shape)
+        jz_mat = np.memmap(jz_fd.name, dtype='float64', mode='r+', shape=snap_shape)
 
         if parallel:
             with Parallel(n_jobs=-1, verbose=10) as ppool:
-                ppool(delayed(parallel_func)(idx, Ez_mat, ni_mat) for idx in range(Nsave))
+                ppool(delayed(parallel_func)(idx, Ez_mat, ni_mat, jx_mat, jy_mat, jz_mat) for idx in range(Nsave))
         else:
             for idx in tqdm.tqdm(range(Nsave)):
-                parallel_func(idx, Ez_mat, ni_mat)
+                parallel_func(idx, Ez_mat, ni_mat, jx_mat, jy_mat, jz_mat)
 
         with h5py.File('warpx_amrex.h5', 'a') as fd:
             fd.create_dataset('fields/Ez', data=Ez_mat)
             fd.create_dataset('fields/ni', data=ni_mat)
+            fd.create_dataset('fields/jx', data=jx_mat)
+            fd.create_dataset('fields/jy', data=jy_mat)
+            fd.create_dataset('fields/jz', data=jz_mat)
             fd['fields/Ez'].attrs['units'] = 'V/m'
             fd['fields/ni'].attrs['units'] = 'm**(-3)'
+            fd['fields/jx'].attrs['units'] = 'A'
+            fd['fields/jy'].attrs['units'] = 'A'
+            fd['fields/jz'].attrs['units'] = 'A'
 
 
 def process_warpx_data(parallel=True):
@@ -221,6 +237,7 @@ def process_turf_data(parallel=True):
     coords = ['x', 'y', 'z']
     grid_spacing = (0.1, 0.1, 0.1)                          # m
     grid_shape = (120, 100, 100)                            # N_cells
+    Nx, Ny, Nz = grid_shape
     sub_shape = tuple([int(ele/2) for ele in grid_shape])   # Subdomain shape
     grid_domain = ((-2, 10), (0, 10), (0, 10))              # m
     dt = 5e-6                                               # s / iteration
@@ -249,8 +266,6 @@ def process_turf_data(parallel=True):
         group.attrs.update({'dt': dt, 'grid_spacing': grid_spacing, 'tf': tf, 'Niter': Niter, 'Nsave': Nsave,
                             'dtype': dtype, 'iters_per_save': iters_per_save, 'coords': coords,
                             'grid_shape': grid_shape, 'Ndomain': Ndomain, 'grid_domain': grid_domain})
-        fd.create_dataset('fields/coords', data=pts)
-        fd['fields/coords'].attrs.update({'axes': ['N_points', 'N_dim', 'N_subdomains'], 'type': 'cartesian'})
 
     def parallel_func(t_idx, nn_mat, ni_mat, j_mat):
         """Obtain QoI data from TURF .vts files at a single timestep"""
@@ -287,10 +302,38 @@ def process_turf_data(parallel=True):
             for idx in tqdm.tqdm(range(Nsave)):
                 parallel_func(idx, nn_mat, ni_mat, j_mat)
 
+        # Organize QoIs into useful shapes
+        permute_axes = (2, 1, 0, 3, 4)
+        pts = pts.reshape((int(Nz / 2), int(Ny / 2), int(Nx / 2), 3, Ndomain))  # This array comes out as (Z, Y, X, 3d, Ndomain)
+        pts = np.transpose(pts, axes=permute_axes)  # Now in the order (X,Y,Z, 3d, Ndomain)
+        nn_mat = nn_mat.reshape((int(Nz / 2), int(Ny / 2), int(Nx / 2), Ndomain, Nsave))  # (Z, Y, X, Ndomain, Nsave)
+        nn_mat = np.array(np.transpose(nn_mat, axes=permute_axes))
+        ni_mat = ni_mat.reshape((int(Nz / 2), int(Ny / 2), int(Nx / 2), Ndomain, Nsave))  # (Z, Y, X, Ndomain, Nsave)
+        ni_mat = np.array(np.transpose(ni_mat, axes=permute_axes))
+        j_mat = j_mat.reshape((int(Nz / 2), int(Ny / 2), int(Nx / 2), Ndomain, Nsave))  # (Z, Y, X, Ndomain, Nsave)
+        j_mat = np.array(np.transpose(j_mat, axes=permute_axes))
+
+        # Stick the subdomains together
+        subdomains = list(itertools.product([0, 1], repeat=3))
+        pts_full = np.empty((Nx, Ny, Nz, 3))
+        nn_full = np.empty((Nx, Ny, Nz, Nsave), dtype='float32')
+        ni_full = np.empty((Nx, Ny, Nz, Nsave), dtype='float32')
+        j_full = np.empty((Nx, Ny, Nz, Nsave), dtype='float32')
+        sub_shape = (int(Nx / 2), int(Ny / 2), int(Nz / 2))
+        for i, subdomain in enumerate(subdomains):
+            xs, ys, zs = [ele * sub_shape[j] for j, ele in enumerate(subdomain)]
+            xe, ye, ze = xs + int(Nx / 2), ys + int(Ny / 2), zs + int(Nz / 2)  # 8 equal cube subdomains
+            pts_full[xs:xe, ys:ye, zs:ze, :] = pts[..., i]
+            nn_full[xs:xe, ys:ye, zs:ze, :] = nn_mat[..., i, :]
+            ni_full[xs:xe, ys:ye, zs:ze, :] = ni_mat[..., i, :]
+            j_full[xs:xe, ys:ye, zs:ze, :] = j_mat[..., i, :]
+
         with h5py.File('turf.h5', 'a') as fd:
-            fd.create_dataset('fields/nn', data=nn_mat)
-            fd.create_dataset('fields/ni', data=ni_mat)
-            fd.create_dataset('fields/j', data=j_mat)
+            fd.create_dataset('fields/coords', data=pts_full)
+            fd['fields/coords'].attrs.update({'axes': ['N_x', 'N_y', 'N_z', 'N_dim'], 'type': 'cartesian'})
+            fd.create_dataset('fields/nn', data=nn_full)
+            fd.create_dataset('fields/ni', data=ni_full)
+            fd.create_dataset('fields/j', data=j_full)
             fd['fields/nn'].attrs['units'] = 'm^-3'
             fd['fields/ni'].attrs['units'] = 'm^-3'
             fd['fields/j'].attrs['units'] = 'A/m^2'
@@ -299,4 +342,4 @@ def process_turf_data(parallel=True):
 if __name__ == "__main__":
     process_warpx_amrex(parallel=True)
     # process_warx_data(parallel=True)
-    # process_turf_data(parallel=True)
+    process_turf_data(parallel=True)

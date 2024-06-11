@@ -2,9 +2,9 @@
 
 #SBATCH --job-name=extract_data
 #SBATCH --partition=standard
-#SBATCH --time=00-00:30:00
+#SBATCH --time=00-10:00:00
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=2g
+#SBATCH --mem-per-cpu=4g
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=36
 #SBATCH --export=ALL
