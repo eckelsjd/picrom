@@ -50,7 +50,7 @@ def process_warpx_amrex(parallel=True):
         ds = yt.load(base_path / data_dirs[idx])
         cov_grid = ds.covering_grid(level=0, left_edge=ds.domain_left_edge, dims=ds.domain_dimensions)
         Ez_mat[..., idx] = cov_grid['Ez'].to_ndarray().squeeze()
-        ni_mat[..., idx] = - cov_grid['rho_ions'].to_ndarray().squeeze() / constants.e  # Amrex has (-) for ions?
+        ni_mat[..., idx] = cov_grid['rho_ions'].to_ndarray().squeeze() / constants.e  # Amrex has (-) for ions?
         jx_mat[..., idx] = cov_grid['jx'].to_ndarray().squeeze()
         jy_mat[..., idx] = cov_grid['jy'].to_ndarray().squeeze()
         jz_mat[..., idx] = cov_grid['jz'].to_ndarray().squeeze()

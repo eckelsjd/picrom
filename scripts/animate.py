@@ -14,11 +14,12 @@ def animate_warpx(qoi_use='ni'):
         dx, dy = attrs['grid_spacing']
         dt = attrs['dt'] * attrs['iters_per_save']
         Nsave = attrs['Nsave']
-        cmap = 'jet'
+        cmap = 'bwr'
         qoi = fd[f'fields/{qoi_use}'][:]  # (Nx, Ny, Nsave)
         match qoi_use:
             case 'ni':
-                norm = 'log'
+                norm = 'linear'
+                qoi *= -1
                 qoi_label = r'Ion density ($m^{-3}$)'
             case 'Ez':
                 norm = 'linear'
@@ -30,19 +31,19 @@ def animate_warpx(qoi_use='ni'):
     # xg, zg = np.meshgrid(x, z)  # (Nz, Nx)
 
     # Preprocessing and plot
-    thresh = 10
+    # thresh = 10
     x_cut = 40
     qoi_plot = np.transpose(qoi, axes=(1, 0, 2))  # (Ny, Nx, Nt)
-    qoi_plot[qoi_plot < thresh] = np.nan
-    qoi_plot[:, :x_cut, :] = np.nan
-    qoi_plot[:, -x_cut:, :] = np.nan
-    vmin, vmax = np.nanmin(qoi_plot), np.nanmax(qoi_plot)
+    # qoi_plot[qoi_plot < thresh] = np.nan
+    # qoi_plot[:, :x_cut, :] = np.nan
+    # qoi_plot[:, -x_cut:, :] = np.nan
+    vmin, vmax = np.nanmin(qoi_plot[..., -100:]), np.nanmax(qoi_plot[..., -100:])
     with matplotlib.rc_context(rc={'font.size': 15, 'font.family': 'STIXGeneral', 'mathtext.fontset': 'stix',
                                    'text.usetex': True}):
         fig, ax = plt.subplots(figsize=(7, 4), layout='tight')
         im = ax.imshow(qoi_plot[..., 0], cmap=cmap, origin='lower', norm=norm, vmin=vmin, vmax=vmax,
                        extent=[0, qoi_plot.shape[1]*dx*100, 0, qoi.shape[1]*dy*100])
-        im.cmap.set_bad((1, 1, 1, 1))
+        im.cmap.set_bad((0, 0, 0, 1))
         im_ratio = Ny / Nx
         cb = fig.colorbar(im, label=qoi_label, fraction=0.046*im_ratio, pad=0.04)
         ax.set_xlabel(r'Axial direction $x$ (cm)')
@@ -57,7 +58,7 @@ def animate_warpx(qoi_use='ni'):
             # l_idx = max(idx_use - window, 0)
             # u_idx = min(idx_use + window, Nsave)
             # im.set_clim(np.nanmin(qoi_plot[..., l_idx:u_idx]), np.nanmax(qoi_plot[..., l_idx:u_idx]))
-            im.cmap.set_bad((1, 1, 1, 1))
+            im.cmap.set_bad((0, 0, 0, 1))
             ax.set_title(r't = {} $\mu$s'.format(f'{curr_t*1e6:4.1f}'))
             return [im]
 
@@ -169,5 +170,5 @@ def animate_turf(qoi_use='ni', loc=0, axis='y'):
 
 
 if __name__ == '__main__':
-    animate_warpx(qoi_use='Ey')
+    animate_warpx(qoi_use='Ez')
     # animate_turf(qoi_use='j', axis='y', loc=0)
