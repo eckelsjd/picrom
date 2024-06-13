@@ -11,6 +11,7 @@ format (`.ttc`) and intermediary formats (`.txt`).
 
 import warnings
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -266,7 +267,7 @@ class ttObject:
         """
         if justCores:
             if outputType == "ttc":
-                with open(directory + fileName + ".ttc", "wb") as saveFile:
+                with open(Path(directory) / (fileName + ".ttc"), "wb") as saveFile:
                     temp = ttObject(self.ttCores)
                     for attribute in vars(self):
                         if attribute != "originalData":

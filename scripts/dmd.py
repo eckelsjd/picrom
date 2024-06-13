@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
+import time
+import pickle
+import os
 
 from pydmd import DMD, BOPDMD, EDMD
 from pydmd.plotter import plot_summary
@@ -12,11 +15,21 @@ import h5py
 import uqtils as uq
 import itertools
 from pathlib import Path
+import argparse
 
 import DaMAT as dmt  # Doruk's TT-ICE package
 
 
-PRINT_NORMALIZATION = True
+parser = argparse.ArgumentParser()
+parser.add_argument('-e', '--epsilon', type=float, help='Epsilon for TT compression', default=1e-3)
+parser.add_argument('-t', '--turf', action='store_true', default=False)
+parser.add_argument('-w', '--warpx', action='store_true', default=False)
+parser.add_argument('-i', '--split', type=float, help='Training/test split', default=0.5)
+parser.add_argument('-c', '--compress', action='store_true', default=False, help='Run TT compression and save')
+parser.add_argument('-d', '--dmd', action='store_true', default=False, help='Run DMD and save')
+parser.add_argument('-p', '--plot', action='store_true', default=False, help='Plot DMD results')
+args = parser.parse_args()
+print(args)
 
 
 def plot3d(figsize=(6, 5)):
@@ -302,6 +315,9 @@ def normalize(data, method='log'):
         case 'zscore':
             c1, c2 = np.mean(data), np.std(data)
             return (data - c1) / c2, (c1, c2)
+        case 'minmax':
+            c1, c2 = np.min(data), np.max(data)
+            return (data - c1) / (c2 - c1), (c1, c2)
         case 'sqrt':
             return np.sqrt(data), (c1, c2)
         case 'log10':
@@ -325,6 +341,9 @@ def denormalize(data, method='log', consts=None):
         case 'zscore':
             c1, c2 = consts
             return data * c2 + c1
+        case 'minmax':
+            c1, c2 = consts
+            return data * (c2 - c1) + c1
         case 'sqrt':
             return data ** 2
         case 'log10':
@@ -340,143 +359,251 @@ def denormalize(data, method='log', consts=None):
             return data
 
 
-def warpx():
+def warpx(tt_compress=False, run_dmd=False, plot_dmd=True, pct_train=0.5, eps=0.001, base_path=None):
     """Compare DMD methods on Warp-X 2d ion density data"""
+    # Setup save directory
+    eps_str = f"{eps:0.4f}".split(".")[-1]
+    if base_path is None:
+        base_path = Path(f'warpx_eps{eps_str}')
+        if not base_path.exists():
+            os.mkdir(base_path)
+    base_path = Path(base_path)
+
     # Load data
-    # with h5py.File('warpx.h5', 'r') as fd:
-    #     attrs = dict(fd['fields'].attrs)
-    #     Nz, Nx = attrs['grid_shape']
-    #     dz, dx = attrs['grid_spacing']
-    #     dt = attrs['dt'] * attrs['iters_per_save']
-    #     Nsave = int(attrs['Nsave'])
-    #     cmap = 'bwr'
-    #     qoi_full = fd[f'fields/ni'][:]  # (Nz, Nx, Nsave)
-    # t = np.arange(0, Nsave) * dt            # (s)
-    # x = np.arange(0, Nx) * dx * 100         # (cm)
-    # z = np.arange(0, Nz) * dz * 100         # (cm)
-    # idx_ss = np.argmin(np.abs(t-14e-6))     # Steady-state around 12 mu-s into simulation
-    # qoi = qoi_full[..., idx_ss:]
-    # t = t[idx_ss:] - t[idx_ss]
-    # Nt = t.shape[0]
-    # sol_exact = qoi.reshape((-1, Nt))  # (Nstates, Ntime)
-    # Nstates = sol_exact.shape[0]
-
-    # with h5py.File('warpx_ni.h5', 'a') as fd:
-    #     group = fd.create_group('fields')
-    #     group.attrs.update({'dt': dt, 'grid_spacing': attrs['grid_spacing'], 'grid_shape': attrs['grid_shape'],
-    #                         'coords': ('N_x', 'N_y', 'N_time')})
-    #     fd.create_dataset('fields/ni', data=qoi_full)
-
-    with h5py.File('warpx_ni.h5', 'r') as fd:
-        qoi = fd['fields/ni'][:]  # (Nx, Ny, Nsave)
+    with h5py.File('warpx_amrex.h5', 'r') as fd:
         attrs = dict(fd['fields'].attrs)
-        Nz, Nx = attrs['grid_shape']
-        dz, dx = attrs['grid_spacing']
-        Nsave = qoi.shape[-1]
-        dt = attrs['dt']
+        Nx, Nz = attrs['grid_shape']
+        dx, dz = attrs['grid_spacing']
+        dt = attrs['dt'] * attrs['iters_per_save']
+        Nsave = int(attrs['Nsave'])
         cmap = 'bwr'
+        qois = ['ni', 'jx', 'jz']
+        norms = ['log', 'minmax', 'minmax']
+        labels = [r'Ion density ($\mathrm{m}^{-3}$)', r'Axial current density (A/$\mathrm{m}^2$)',
+                  r'Azimuthal current density (A/$\mathrm{m}^2$)']
+        Nqoi = len(qois)
+        sim_data = np.empty((Nx, Nz, Nqoi, Nsave))
+        norm_data = np.empty((Nx, Nz, Nqoi, Nsave))
+        norm_consts = []
+        for i, qoi in enumerate(qois):
+            sim_data[..., i, :] = fd[f'fields/{qoi}'][:]  # (Nx, Nz, Nsave)
+            norm_data[..., i, :], consts = normalize(sim_data[..., i, :], method=norms[i])
+            norm_consts.append(consts)
 
     t = np.arange(0, Nsave) * dt
     x = np.arange(0, Nx) * dx * 100         # (cm)
     z = np.arange(0, Nz) * dz * 100         # (cm)
-    idx_ss = np.argmin(np.abs(t - 14e-6))  # Steady-state around 14 mu-s into simulation
-    qoi = qoi[..., idx_ss:]
-    Nt = qoi.shape[-1]
-    sol_exact = qoi.reshape((-1, Nt))  # (Nstates, Ntime)
+    idx_ss = np.argmin(np.abs(t - 10e-6))  # Steady-state
+    sim_data = sim_data[..., idx_ss:]
+    norm_data = norm_data[..., idx_ss:]
+    Nt = sim_data.shape[-1]
     t = t[idx_ss:] - t[idx_ss]
-    Nstates = sol_exact.shape[0]
-
-    # Preprocessing
-    r = 76
-    pct_train = 0.5
-    norm_method = 'log'
-    norm1, norm2 = 'log', 'none'
     num_train = round(pct_train * Nt)
-    dmd_method = 'exact'
-    eps = 0.001  # TT reconstruction accuracy
-    consts = None
 
-    match dmd_method:
-        case 'exact':
-            snapshot_matrix, consts = normalize(sol_exact[:, :num_train], method=norm_method)  # (Nstates, Ntrain)
-            if PRINT_NORMALIZATION:
-                data = snapshot_matrix
-                print(f'{"Min": >10} {"Max": >10} {"Mean": >10} {"Median": >10} {"Std": >10}')
-                print(f'{data.min(): >10.5f} {data.max(): >10.5f} {np.mean(data): >10.5f} {np.median(data): >10.5f} {np.std(data): >10.5f}')
-        case 'tensor':
-            base_path = Path('../results/warpx')
-            tcc_file = f'warpx_ni_compressed_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.ttc'
-            latent_file = f'warpx_ni_latent_data_{norm1}_{norm2}_eps' + f'{eps:0.8f}'.split(".")[-1] + '.npy'
-            ttObj = dmt.ttObject.loadData(str((base_path/tcc_file).resolve()))
-            latent_data = np.load(base_path / latent_file)  # (Nlatent, Ntrain)
-            snapshot_matrix = latent_data[:, :num_train]
-            rec = ttObj.reconstruct(snapshot_matrix).reshape(qoi[..., :num_train].shape)
-            rec_denorm = denormalize(rec, method=norm_method, consts=consts)
-            targ, _ = normalize(qoi[..., :num_train], method=norm_method)
-            r = snapshot_matrix.shape[0]  # Use all the TT-latent space for DMD
-            print(f'Normalized reconstruction L2 max error: {np.max(relative_error(targ, rec, axis=(0, 1)))}')
-            print(
-                f'Unnormalized reconstruction L2 max error: {np.max(relative_error(qoi[..., :num_train], rec_denorm, axis=(0, 1)))}')
+    # Do TT-compression if necessary
+    if tt_compress:
+        total_time = 0
+        ttObj = dmt.ttObject(norm_data[..., 0, np.newaxis], epsilon=eps)
+        ttObj.changeShape([8, 8, 8, 8, 8, 4, Nqoi, 1])
+        ttObj.ttDecomp(dtype=np.float64)
+        total_time += ttObj.compressionTime
+        print(f'Performing TT-compression for eps={eps:.5f} ...')
+        print(f'{0:4d}, {ttObj.compressionRatio:09.3f}, {np.prod(ttObj.reshapedShape) / ttObj.ttCores[-1].shape[0]:12.3f}, '
+              f'{ttObj.ttCores[-1].shape[0]:4d}, {ttObj.compressionTime:07.3f}, {total_time:07.3f}, {ttObj.ttRanks}')
+        for simulation_idx in range(1, num_train):
+            data = norm_data[..., simulation_idx, np.newaxis]
+            tic = time.time()
+            ttObj.ttICEstar(data, heuristicsToUse=['skip', 'occupancy'], occupancyThreshold=1)
+            step_time = time.time() - tic
+            total_time += step_time
+            print(f'{simulation_idx:4d}, {ttObj.compressionRatio:09.3f}, {np.prod(ttObj.reshapedShape) / ttObj.ttCores[-1].shape[0]:12.3f}, ' 
+                  f'{ttObj.ttCores[-1].shape[0]:4d}, {step_time:07.3f}, {total_time:07.3f}, {ttObj.ttRanks}')
 
-    # Exact-DMD
-    dmd = DMD(svd_rank=r, exact=False)
-    dmd.fit(snapshot_matrix)
-    b, lamb, phi = dmd.amplitudes, dmd.eigs, dmd.modes  # (r,), (r,), and (Nstates, r)
-    omega = np.log(lamb) / dt  # Continuous time eigenvalues
-    sol_dmd = phi @ np.diag(b) @ np.exp(t[np.newaxis, :] * omega[:, np.newaxis])  # (Nstates, Nt)
-    print(f'Imaginary sol maximum: {np.max(np.abs(np.imag(sol_dmd)))}, Real sol maximum: {np.max(np.abs(np.real(sol_dmd)))}')
+        # Don't save if TT did not converge (if r is too high)
+        r = ttObj.ttRanks[-2]
+        if r >= num_train:
+            raise SystemError(f'TT did not converge since r=num_train={r}. Try increasing epsilon...')
 
-    match dmd_method:
-        case 'exact':
-            sol_dmd = denormalize(sol_dmd.real, method=norm_method, consts=consts)
-        case 'tensor':
-            sol_dmd = ttObj.reconstruct(sol_dmd.real)
-            sol_dmd = denormalize(sol_dmd, method=norm_method, consts=consts)
+        ttObj.saveData(f"warpx_tt_eps{eps_str}", directory=str(base_path.resolve()), outputType="ttc")
+        latent_data = np.empty((r, num_train))
+        for simulation_idx in range(num_train):
+            data = norm_data[..., simulation_idx, np.newaxis]
+            latent_data[:, simulation_idx] = ttObj.projectTensor(data).squeeze()
+        np.save(base_path / f"warpx_latent_eps{eps_str}.npy", latent_data)
 
-    qoi_dmd = sol_dmd.reshape((Nz, Nx, Nt))  # (Nz, Nx, Nt)
-    l2_error = relative_error(qoi, qoi_dmd, axis=(0, 1))
+        rec = ttObj.reconstruct(latent_data).reshape(norm_data[..., :num_train].shape)
+        print(f'Normalized reconstruction L2 max error: {np.max(relative_error(norm_data[..., :num_train], rec, axis=(0, 1, 2)))}\n')
 
-    thresh = 10
-    qoi[qoi <= thresh] = np.nan
-    qoi_dmd[qoi_dmd <= thresh] = np.nan  # For plotting
-    vmin, vmax = np.nanmin([qoi[..., -1], qoi_dmd[..., -1]]), np.nanmax([qoi[..., -1], qoi_dmd[..., -1]])
-    imshow_args = {'extent': [0, x[-1], 0, z[-1]], 'origin': 'lower', 'vmin': vmin, 'vmax': vmax, 'cmap': cmap}
-    with plt.style.context('uqtils.default'):
-        with matplotlib.rc_context(rc={'font.size': 16}):
-            # Ground truth final snapshot
-            figsize = (7, 4)
-            fig, ax = plt.subplots(figsize=figsize, layout='tight')
-            im = ax.imshow(qoi[:, :, -1], **imshow_args)
+    else:
+        # Load TT-compression results from file
+        print('Loading TT from file...')
+        tcc_file = f'warpx_tt_eps{eps_str}.ttc'
+        latent_file = f'warpx_latent_eps{eps_str}.npy'
+        if not (base_path / tcc_file).exists() or not (base_path / latent_file).exists():
+            raise SystemError('Must have TT compression files available to move on.')
+        ttObj = dmt.ttObject.loadData(str((base_path / tcc_file).resolve()))
+        latent_data = np.load(base_path / latent_file)  # (Nlatent, Ntrain)
+        rec = ttObj.reconstruct(latent_data).reshape(norm_data[..., :num_train].shape)
+        # rec_denorm = denormalize(rec, method=norm_method, consts=consts)
+        # targ, _ = normalize(qoi[..., :num_train], method=norm_method)
+        r = latent_data.shape[0]  # Use all the TT-latent space for DMD
+        print(f'Normalized reconstruction L2 max error: {np.max(relative_error(norm_data[..., :num_train], rec, axis=(0, 1, 2)))}\n')
+        # print(f'Unnormalized reconstruction L2 max error: {np.max(relative_error(qoi[..., :num_train], rec_denorm, axis=(0, 1)))}')
+
+    if run_dmd:
+        print(f'Performing exact DMD ...')  # Technically "projection" DMD, but who cares
+        snapshot_matrix = norm_data[..., :num_train].reshape((-1, num_train))  # (Nstates, Ntrain)
+        data = snapshot_matrix
+        print('Distribution of normalized training data:')
+        print(f'{"Min": >10} {"Max": >10} {"Mean": >10} {"Median": >10} {"Std": >10}')
+        print(f'{data.min(): >10.5f} {data.max(): >10.5f} {np.mean(data): >10.5f} {np.median(data): >10.5f} {np.std(data): >10.5f}\n')
+        dmd = DMD(svd_rank=r, exact=False)
+        dmd.fit(snapshot_matrix)
+        b, lamb, phi = dmd.amplitudes, dmd.eigs, dmd.modes  # (r,), (r,), and (Nstates, r)
+        omega = np.log(lamb) / dt  # Continuous time eigenvalues
+        sol_dmd = phi @ np.diag(b) @ np.exp(t[np.newaxis, :] * omega[:, np.newaxis])  # (Nstates, Nt)
+        print(f'Imaginary sol maximum: {np.max(np.abs(np.imag(sol_dmd)))}, Real sol maximum: {np.max(np.abs(np.real(sol_dmd)))}')
+        sol_dmd = sol_dmd.real.reshape(norm_data.shape)
+        exact_dmd = sol_dmd
+
+        print(f'Performing TT DMD ...')
+        snapshot_matrix = latent_data
+        data = snapshot_matrix
+        print('Distribution of normalized training data:')
+        print(f'{"Min": >10} {"Max": >10} {"Mean": >10} {"Median": >10} {"Std": >10}')
+        print(f'{data.min(): >10.5f} {data.max(): >10.5f} {np.mean(data): >10.5f} {np.median(data): >10.5f} {np.std(data): >10.5f}\n')
+        dmd = DMD(svd_rank=r, exact=False)
+        dmd.fit(snapshot_matrix)
+        b, lamb, phi = dmd.amplitudes, dmd.eigs, dmd.modes  # (r,), (r,), and (Nstates, r)
+        omega = np.log(lamb) / dt  # Continuous time eigenvalues
+        sol_dmd = phi @ np.diag(b) @ np.exp(t[np.newaxis, :] * omega[:, np.newaxis])  # (Nstates, Nt)
+        print(f'Imaginary sol maximum: {np.max(np.abs(np.imag(sol_dmd)))}, Real sol maximum: {np.max(np.abs(np.real(sol_dmd)))}')
+        sol_dmd = ttObj.reconstruct(sol_dmd.real).reshape(norm_data.shape)
+        tt_dmd = sol_dmd
+
+        # Denormalize
+        for i in range(Nqoi):
+            exact_dmd[..., i, :] = denormalize(exact_dmd[..., i, :], method=norms[i], consts=norm_consts[i])
+            tt_dmd[..., i, :] = denormalize(tt_dmd[..., i, :], method=norms[i], consts=norm_consts[i])
+
+        with open(base_path / f'warpx_dmd_exact_eps{eps_str}.pkl', 'wb') as fd:
+            pickle.dump({'dmd': dmd, 'sol_dmd': exact_dmd}, fd)
+        with open(base_path / f'warpx_dmd_tt_eps{eps_str}.pkl', 'wb') as fd:
+            pickle.dump({'dmd': dmd, 'sol_dmd': tt_dmd}, fd)
+    else:
+        # Load DMD results from file
+        exact_file = f'warpx_dmd_exact_eps{eps_str}.pkl'
+        tt_file = f'warpx_dmd_tt_eps{eps_str}.pkl'
+        if not (base_path / exact_file).exists() or not (base_path / tt_file).exists():
+            raise SystemError('Must have DMD result files available to move on.')
+        with open(base_path / exact_file, 'rb') as fd:
+            exact_dmd = pickle.load(fd)['sol_dmd']
+        with open(base_path / tt_file, 'rb') as fd:
+            tt_dmd = pickle.load(fd)['sol_dmd']
+
+    if plot_dmd:
+        with plt.style.context('uqtils.default'):
+            # Ion density
+            qoi_idx, time_idx = 0, -1
+            truth_slice = sim_data[..., qoi_idx, time_idx].T        # (Nz, Nx)
+            dmd_slice = exact_dmd[..., qoi_idx, time_idx].T         # (Nz, Nx)
+            tt_slice = tt_dmd[..., qoi_idx, time_idx].T             # (Nz, Nx)
+            dmd_l2_error = relative_error(sim_data[..., qoi_idx, :], exact_dmd[..., qoi_idx, :], axis=(0, 1))
+            tt_l2_error = relative_error(sim_data[..., qoi_idx, :], tt_dmd[..., qoi_idx, :], axis=(0, 1))
+            dmd_abs_error = np.abs(dmd_slice - truth_slice)
+            tt_abs_error = np.abs(tt_slice - truth_slice)
+            vmin, vmax = np.nanmin([truth_slice, dmd_slice, tt_slice]), np.nanmax([truth_slice, dmd_slice, tt_slice])
+            emin, emax = np.nanmin([dmd_abs_error, tt_abs_error]), np.nanmax([dmd_abs_error, tt_abs_error])
+            imshow_args = {'extent': [0, x[-1], 0, z[-1]], 'origin': 'lower', 'cmap': cmap}
+
+            fig, ax = plt.subplots(2, 3, figsize=(15.25, 6), layout='tight', gridspec_kw={'width_ratios': [5, 5, 5.25]},
+                                   sharex='col', sharey='row')
+            ax[0, 0].imshow(truth_slice, vmin=vmin, vmax=vmax, **imshow_args)
+            ax[0, 1].imshow(dmd_slice, vmin=vmin, vmax=vmax, **imshow_args)
+            im1 = ax[0, 2].imshow(tt_slice, vmin=vmin, vmax=vmax, **imshow_args)
+            ax[1, 0].imshow(truth_slice, vmin=vmin, vmax=vmax, **imshow_args)
+            ax[1, 1].imshow(dmd_abs_error, vmin=emin, vmax=emax, **imshow_args)
+            im2 = ax[1, 2].imshow(tt_abs_error, vmin=emin, vmax=emax, **imshow_args)
+
             im_ratio = Nz / Nx
-            cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
-            uq.ax_default(ax, r'Axial direction $x$ (cm)', r'Azimuthal direction $y$ (cm)', legend=False)
-            ax.grid(visible=False)
-            fig.savefig('warpx_truth_final.pdf', bbox_inches='tight', format='pdf')
-            plt.show(block=False)
+            fig.colorbar(im1, label=labels[qoi_idx], fraction=0.048*im_ratio, ax=ax[0, 2])
+            fig.colorbar(im2, label='Absolute error', fraction=0.048*im_ratio, ax=ax[1, 2])
 
-            # DMD final snapshot
-            fig, ax = plt.subplots(figsize=figsize, layout='tight')
-            im = ax.imshow(qoi_dmd[:, :, -1], **imshow_args)
-            im_ratio = Nz / Nx
-            cb = fig.colorbar(im, label=r'Ion density ($m^{-3}$)', fraction=0.048*im_ratio, pad=0.04)
-            uq.ax_default(ax, r'Axial direction $x$ (cm)', r'Azimuthal direction $y$ (cm)', legend=False)
-            ax.grid(visible=False)
-            fig.savefig(f'warpx_{dmd_method}_final_r={r}.pdf', bbox_inches='tight', format='pdf')
-            plt.show(block=False)
+            titles = ['Truth', 'Exact-DMD', 'Tensor-train DMD']
+            for i in range(2):
+                for j in range(3):
+                    sub_ax = ax[i, j]
+                    xlabel = 'Axial direction (cm)' if i == 1 else ''
+                    ylabel = 'Azimuthal direction (cm)' if j == 0 else ''
+                    uq.ax_default(sub_ax, xlabel, ylabel, legend=False)
+                    sub_ax.grid(visible=False)
+                    if i == 0:
+                        sub_ax.set_title(titles[j])
+            # ax[1, 1].set_ylabel('Azimuthal direction (cm)')
+            # ax[0, 0].set_xlabel('Axial direction (cm)')
+            fig.subplots_adjust(wspace=0.01, hspace=0.01)
+            # fig.savefig(base_path / f'warpx_{qois[qoi_idx]}_final.pdf', bbox_inches='tight', format='pdf')
 
-            # L2 error over time
-            c = plt.get_cmap(cmap)(0)
-            fig, ax = plt.subplots(figsize=figsize, layout='tight')
-            ax.plot(t * 1e6, l2_error, '-k')
+            c = (0.5, 0.5, 0.5)
+            fig, ax = plt.subplots(figsize=(6, 5), layout='tight')
+            ax.plot(t * 1e6, dmd_l2_error, '--b', label='Exact-DMD')
+            ax.plot(t * 1e6, tt_l2_error, '--r', label='Tensor-train DMD')
             ax.axvspan(0, t[num_train] * 1e6, alpha=0.2, color=c, label='Training period')
-            ax.axvline(t[num_train] * 1e6, color=c, ls='--', lw=1)
+            ax.axvline(t[num_train] * 1e6, color=c, ls='--', lw=1.2)
             ax.set_yscale('log')
             uq.ax_default(ax, r'Time ($\mu$s)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
-            fig.savefig(f'warpx_{dmd_method}_error_r={r}.pdf', bbox_inches='tight', format='pdf')
-            plt.show(block=False)
+            # fig.savefig(base_path / f'warpx_{qois[qoi_idx]}_error.pdf', bbox_inches='tight', format='pdf')
+
+            # Axial current density
+            qoi_idx, time_idx = 1, -1
+            truth_slice = np.mean(sim_data[..., qoi_idx, :], axis=1)  # (Nx, Nt)
+            dmd_slice = np.mean(exact_dmd[..., qoi_idx, :], axis=1)   # (Nx, Nt)
+            tt_slice = np.mean(tt_dmd[..., qoi_idx, :], axis=1)       # (Nx, Nt)
+            dmd_l2_error = relative_error(truth_slice, dmd_slice, axis=0)
+            tt_l2_error = relative_error(truth_slice, tt_slice, axis=0)
+
+            fig, ax = plt.subplots(figsize=(6, 5), layout='tight')
+            ax.plot(x, truth_slice[:, time_idx], '-k', label='Truth')
+            ax.plot(x, dmd_slice[:, time_idx], '--b', label='Exact-DMD')
+            ax.plot(x, tt_slice[:, time_idx], '--r', label='Tensor-train DMD')
+            uq.ax_default(ax, r'Axial direction (cm)', r'Average axial current density (A/$\mathrm{m}^2$)', legend=True)
+            # fig.savefig(base_path / f'warpx_{qois[qoi_idx]}_final.pdf', bbox_inches='tight', format='pdf')
+
+            fig, ax = plt.subplots(figsize=(6, 5), layout='tight')
+            ax.plot(t * 1e6, dmd_l2_error, '--b', label='Exact-DMD')
+            ax.plot(t * 1e6, tt_l2_error, '--r', label='Tensor-train DMD')
+            ax.axvspan(0, t[num_train] * 1e6, alpha=0.2, color=c, label='Training period')
+            ax.axvline(t[num_train] * 1e6, color=c, ls='--', lw=1.2)
+            ax.set_yscale('log')
+            uq.ax_default(ax, r'Time ($\mu$s)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
+            # fig.savefig(base_path / f'warpx_{qois[qoi_idx]}_error.pdf', bbox_inches='tight', format='pdf')
+
+            # Azimuthal current density
+            qoi_idx, time_idx = 2, -1
+            truth_slice = np.mean(sim_data[..., qoi_idx, :], axis=1)    # (Nx, Nt)
+            dmd_slice = np.mean(exact_dmd[..., qoi_idx, :], axis=1)     # (Nx, Nt)
+            tt_slice = np.mean(tt_dmd[..., qoi_idx, :], axis=1)         # (Nx, Nt)
+            dmd_l2_error = relative_error(truth_slice, dmd_slice, axis=0)
+            tt_l2_error = relative_error(truth_slice, tt_slice, axis=0)
+
+            fig, ax = plt.subplots(figsize=(6, 5), layout='tight')
+            ax.plot(x, truth_slice[:, time_idx], '-k', label='Truth')
+            ax.plot(x, dmd_slice[:, time_idx], '--b', label='Exact-DMD')
+            ax.plot(x, tt_slice[:, time_idx], '--r', label='Tensor-train DMD')
+            uq.ax_default(ax, r'Axial direction (cm)', r'Average azimuthal current density (A/$\mathrm{m}^2$)', legend=True)
+            # fig.savefig(base_path / f'warpx_{qois[qoi_idx]}_final.pdf', bbox_inches='tight', format='pdf')
+
+            fig, ax = plt.subplots(figsize=(6, 5), layout='tight')
+            ax.plot(t * 1e6, dmd_l2_error, '--b', label='Exact-DMD')
+            ax.plot(t * 1e6, tt_l2_error, '--r', label='Tensor-train DMD')
+            ax.axvspan(0, t[num_train] * 1e6, alpha=0.2, color=c, label='Training period')
+            ax.axvline(t[num_train] * 1e6, color=c, ls='--', lw=1.2)
+            ax.set_yscale('log')
+            uq.ax_default(ax, r'Time ($\mu$s)', r'Relative $L_2$ error', legend={'loc': 'lower right'})
+            # fig.savefig(base_path / f'warpx_{qois[qoi_idx]}_error.pdf', bbox_inches='tight', format='pdf')
 
             # Singular value spectrum
-            s = np.linalg.svd(snapshot_matrix, full_matrices=False, compute_uv=False)
+            s = np.linalg.svd(sim_data[..., :num_train].reshape((-1, num_train)), full_matrices=False, compute_uv=False)
             frac = s ** 2 / np.sum(s ** 2)
             r = r if isinstance(r, int) else int(np.where(np.cumsum(frac) >= r)[0][0]) + 1
             fig, ax = plt.subplots(figsize=(6, 5), layout='tight')
@@ -484,10 +611,9 @@ def warpx():
             h, = ax.plot(frac[:r], 'or', ms=5, label=r'{}'.format(f'SVD rank $r={r}$'))
             ax.set_yscale('log')
             uq.ax_default(ax, 'Index', 'Fraction of total variance', legend={'loc': 'upper right'})
-            fig.savefig(f'warpx_{dmd_method}_svals_r={r}.pdf', bbox_inches='tight', format='pdf')
-            plt.show(block=False)
+            # fig.savefig(f'warpx_{dmd_method}_svals_r={r}.pdf', bbox_inches='tight', format='pdf')
 
-            plt.show()
+        plt.show()
 
 
 def turf_3d_plot(qoi_full, qoi_dmd, pts_full, figsize=(6, 5)):
@@ -713,5 +839,7 @@ if __name__ == '__main__':
     # tutorial()
     # diffusion_equation()
     # burgers_equation()
-    warpx()
-    # turf()
+    if args.warpx:
+        warpx(tt_compress=args.compress, run_dmd=args.dmd, plot_dmd=args.plot, pct_train=args.split, eps=args.epsilon)
+    if args.turf:
+        turf()

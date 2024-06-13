@@ -19,11 +19,21 @@ def animate_warpx(qoi_use='ni'):
         match qoi_use:
             case 'ni':
                 norm = 'linear'
-                qoi *= -1
                 qoi_label = r'Ion density ($m^{-3}$)'
             case 'Ez':
                 norm = 'linear'
                 qoi_label = r'Azimuthal electric field (V/m)'
+            case 'jx':
+                norm = 'linear'
+                qoi = (qoi - np.mean(qoi)) / np.std(qoi)
+                # qoi_label = r'Current density $j_x$ (A/$\mathrm{m}^2$)'
+                qoi_label = r'Normalized current density $j_x$'
+            case 'jz':
+                norm = 'linear'
+                # qoi = (qoi - np.mean(qoi)) / np.std(qoi)
+                qoi_label = r'Current density $j_y$ (A/$\mathrm{m}^2$)'
+                # qoi_label = r'Normalized current density $j_y$'
+
 
     # t = np.arange(0, Nsave) * dt
     # x = np.arange(0, Nx) * dx * 100
@@ -32,11 +42,8 @@ def animate_warpx(qoi_use='ni'):
 
     # Preprocessing and plot
     # thresh = 10
-    x_cut = 40
     qoi_plot = np.transpose(qoi, axes=(1, 0, 2))  # (Ny, Nx, Nt)
     # qoi_plot[qoi_plot < thresh] = np.nan
-    # qoi_plot[:, :x_cut, :] = np.nan
-    # qoi_plot[:, -x_cut:, :] = np.nan
     vmin, vmax = np.nanmin(qoi_plot[..., -100:]), np.nanmax(qoi_plot[..., -100:])
     with matplotlib.rc_context(rc={'font.size': 15, 'font.family': 'STIXGeneral', 'mathtext.fontset': 'stix',
                                    'text.usetex': True}):
@@ -58,7 +65,7 @@ def animate_warpx(qoi_use='ni'):
             # l_idx = max(idx_use - window, 0)
             # u_idx = min(idx_use + window, Nsave)
             # im.set_clim(np.nanmin(qoi_plot[..., l_idx:u_idx]), np.nanmax(qoi_plot[..., l_idx:u_idx]))
-            im.cmap.set_bad((0, 0, 0, 1))
+            # im.cmap.set_bad((0, 0, 0, 1))
             ax.set_title(r't = {} $\mu$s'.format(f'{curr_t*1e6:4.1f}'))
             return [im]
 
@@ -170,5 +177,5 @@ def animate_turf(qoi_use='ni', loc=0, axis='y'):
 
 
 if __name__ == '__main__':
-    animate_warpx(qoi_use='Ez')
+    animate_warpx(qoi_use='jz')
     # animate_turf(qoi_use='j', axis='y', loc=0)

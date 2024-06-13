@@ -5,3 +5,5 @@ logs/
 *.ttc
 *.pdf
 *.gif
+warpx_*
+turf_*

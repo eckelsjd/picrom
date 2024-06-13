@@ -14,6 +14,7 @@ dependencies = [
     "vtk>=9.3.0",
     "pydmd>=1.0.0",
     "yt>=4.3.1",
+    "uqtils>=0.3.1",
 ]
 requires-python = ">=3.11"
 readme = "docs/README.md"
@@ -76,5 +77,4 @@ dev = [
     "mkdocstrings[python]>=0.24.0",
     "h5py>=3.11.0",
     "openpmd-viewer>=1.10.0",
-    "-e file:///${PROJECT_ROOT}/../uqtils#egg=uqtils",
 ]
